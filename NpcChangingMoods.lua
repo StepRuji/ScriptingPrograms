@@ -2,24 +2,13 @@
 -- Roblox Username: StepRuji
 -- Discord Username: stepruji
 
---[[
-	NPC Mood Controller
-
-	Controls NPC mood, movement, and reactions to players.
-
-	Mood controls the NPC's personality, such as speed and behaviour.
-	State controls the current action, such as wandering, interacting,
-	or fleeing.
-
-	This is handled on the server so NPC decisions have one source of truth.
-	AI updates and pathfinding are limited to avoid unnecessary server usage.
-]]
-
+-- Controls NPC mood, movement, and player reactions.
+-- Mood controls personality settings while state controls the current action.
+-- The server owns decisions so NPC behaviour stays consistent.
 
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
-
 
 local npc = script.Parent
 local humanoid = npc:WaitForChild("Humanoid")
@@ -27,20 +16,17 @@ local rootPart = npc:WaitForChild("HumanoidRootPart")
 local head = npc:WaitForChild("Head")
 
 
--- Central settings for balancing NPC behaviour.
--- Keeping these values together makes adjustments easier without changing logic.
+-- Central settings used to balance NPC behaviour.
 local CONFIG = {
 	DetectionRadius = 35,
 	ReturnDistance = 45,
 	DefaultStopDistance = 5,
 	WanderRadius = 20,
 
-	-- The AI does not need to update every frame.
-	-- Running decisions 5 times per second keeps behaviour responsive while
-	-- reducing server load with multiple NPCs.
+	-- Limits AI checks instead of running expensive logic every frame.
 	UpdateInterval = 0.2,
 
-	-- Pathfinding is expensive, so routes are not constantly recalculated.
+	-- Prevents unnecessary path recalculation.
 	PathRefreshInterval = 1,
 
 	MoodMinimumTime = 10,
@@ -50,11 +36,9 @@ local CONFIG = {
 }
 
 
--- Mood data is separated from the behaviour logic.
--- Adding a new personality only requires adding data instead of creating
--- another set of movement conditions.
+-- Behaviour is stored as data so new moods can be added without creating
+-- separate movement systems for every personality.
 local MOODS = {
-
 	CALM = {
 		Speed = 10,
 		Color = Color3.fromRGB(92, 220, 110),
@@ -132,9 +116,8 @@ local lastGoal = nil
 
 
 -- Used to cancel outdated movement requests.
--- If a newer command is created, older pathfinding results are ignored.
+-- If a newer path is created, older movement tasks are ignored.
 local movementId = 0
-
 
 local isMoving = false
 local lastHealth = humanoid.Health
@@ -151,9 +134,6 @@ local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 raycastParams.FilterDescendantsInstances = {npc}
 
-
--- Finds the optional mood display above the NPC.
--- The AI should continue working even if the UI is missing.
 local function findMoodLabel()
 
 	local overhead = head:FindFirstChild("Overhead")
@@ -191,16 +171,13 @@ end
 local moodLabel = findMoodLabel()
 
 
-
--- Allows other server scripts to change the NPC personality.
--- A BindableEvent is used because this communication stays inside the server.
+-- Allows other server scripts to change the NPC mood.
+-- BindableEvent is used because this communication does not need client access.
 local setMoodEvent = npc:FindFirstChild("SetMood")
-
 local ownsSetMoodEvent = false
 
 
 if not setMoodEvent then
-
 	setMoodEvent = Instance.new("BindableEvent")
 	setMoodEvent.Name = "SetMood"
 	setMoodEvent.Parent = npc
@@ -209,10 +186,8 @@ if not setMoodEvent then
 end
 
 
-
 npc:SetAttribute("Mood", currentMood)
 npc:SetAttribute("State", currentState)
-
 
 
 local function setState(newState)
@@ -221,20 +196,16 @@ local function setState(newState)
 		return
 	end
 
-
 	currentState = newState
 	npc:SetAttribute("State", newState)
 end
 
 
-
--- Updates every system connected to the NPC mood.
--- Keeping this in one function prevents movement speed, UI, and timers
--- becoming different values.
+-- Updates all mood-related systems together so speed, UI, and timers
+-- cannot become out of sync.
 local function setMood(newMood, forcedDuration)
 
 	local moodData = MOODS[newMood]
-
 
 	if not moodData then
 		warn("Invalid NPC mood:", newMood)
@@ -243,7 +214,6 @@ local function setMood(newMood, forcedDuration)
 
 
 	currentMood = newMood
-
 	humanoid.WalkSpeed = moodData.Speed
 
 
@@ -258,17 +228,13 @@ local function setMood(newMood, forcedDuration)
 	end
 
 
-
 	local duration = forcedDuration
 
-
 	if not duration then
-
 		duration = random:NextNumber(
 			CONFIG.MoodMinimumTime,
 			CONFIG.MoodMaximumTime
 		)
-
 	end
 
 
@@ -276,37 +242,27 @@ local function setMood(newMood, forcedDuration)
 end
 
 
-
--- Changes personality randomly without repeating the same mood.
--- This avoids unnecessary updates that do not actually change behaviour.
+-- Selects a different mood so the NPC does not repeatedly refresh the
+-- same behaviour.
 local function chooseRandomMood()
 
 	local chosenMood = currentMood
 
-
 	while chosenMood == currentMood do
-
 		chosenMood = moodNames[
-			random:NextInteger(
-				1,
-				#moodNames
-			)
+			random:NextInteger(1, #moodNames)
 		]
-
 	end
-
 
 	setMood(chosenMood)
 end
 
 
-
--- Makes sure a player is a valid target before using their character.
--- Players can temporarily have no character while loading or resetting.
+-- Makes sure a player has a valid character before the NPC targets them.
+-- Players may temporarily have no character while loading or resetting.
 local function getCharacterParts(player)
 
 	local character = player.Character
-
 
 	if not character then
 		return nil, nil
@@ -316,10 +272,8 @@ local function getCharacterParts(player)
 	local targetHumanoid =
 		character:FindFirstChildOfClass("Humanoid")
 
-
 	local targetRoot =
 		character:FindFirstChild("HumanoidRootPart")
-
 
 
 	if not targetHumanoid or not targetRoot then
@@ -336,14 +290,12 @@ local function getCharacterParts(player)
 end
 
 
-
--- Checks visibility before allowing the NPC to react.
--- Without this, the NPC could detect players through walls.
+-- Checks visibility before reacting to players.
+-- This prevents NPCs detecting targets through walls.
 local function hasLineOfSight(targetCharacter, targetRoot)
 
 	local startPosition =
 		rootPart.Position + Vector3.new(0, 2, 0)
-
 
 	local direction =
 		targetRoot.Position - startPosition
@@ -365,10 +317,8 @@ local function hasLineOfSight(targetCharacter, targetRoot)
 end
 
 
-
 -- Finds the closest visible player.
--- Distance checks happen before raycasts because they are cheaper,
--- reducing physics checks when many players are present.
+-- Distance checks happen first because they are cheaper than raycasts.
 local function getNearestPlayer()
 
 	local closestRoot = nil
@@ -387,11 +337,7 @@ local function getNearestPlayer()
 
 
 		local distance =
-			(
-				targetRoot.Position
-				- rootPart.Position
-			).Magnitude
-
+			(targetRoot.Position - rootPart.Position).Magnitude
 
 
 		if distance >= closestDistance then
@@ -409,7 +355,6 @@ local function getNearestPlayer()
 
 		closestRoot = targetRoot
 		closestDistance = distance
-
 	end
 
 
@@ -417,9 +362,7 @@ local function getNearestPlayer()
 end
 
 
-
--- Converts a random position into a point on the map.
--- This prevents wandering destinations from being placed in the air.
+-- Finds a valid ground position for wandering and fleeing.
 local function getGroundPosition(position)
 
 	local result = workspace:Raycast(
@@ -438,39 +381,33 @@ local function getGroundPosition(position)
 end
 
 
-
--- Creates a random wandering location around the original spawn.
--- Using homePosition prevents the NPC slowly moving away over time.
+-- Generates a random location around the NPC's starting position.
+-- Keeping this centred prevents the NPC drifting away over time.
 local function getWanderPoint()
 
-	local xOffset =
-		random:NextNumber(
-			-CONFIG.WanderRadius,
-			CONFIG.WanderRadius
-		)
+	local xOffset = random:NextNumber(
+		-CONFIG.WanderRadius,
+		CONFIG.WanderRadius
+	)
 
-
-	local zOffset =
-		random:NextNumber(
-			-CONFIG.WanderRadius,
-			CONFIG.WanderRadius
-		)
-
+	local zOffset = random:NextNumber(
+		-CONFIG.WanderRadius,
+		CONFIG.WanderRadius
+	)
 
 
 	return getGroundPosition(
-		homePosition
-			+ Vector3.new(
-				xOffset,
-				0,
-				zOffset
-			)
+		homePosition + Vector3.new(
+			xOffset,
+			0,
+			zOffset
+		)
 	)
 end
 
 -- Stops the current movement command.
--- Incrementing movementId prevents older pathfinding tasks from controlling
--- the NPC after a newer decision has been made.
+-- Increasing movementId makes older pathfinding tasks ignore themselves
+-- if the NPC has already received a newer instruction.
 local function stopMoving()
 
 	if not isMoving then
@@ -479,19 +416,16 @@ local function stopMoving()
 
 
 	movementId += 1
-
 	isMoving = false
 	lastGoal = nil
-
 
 	humanoid:MoveTo(rootPart.Position)
 end
 
 
-
--- Creates and follows a path to a destination.
--- Pathfinding can yield while Roblox calculates routes, so it runs separately
--- from the main AI update loop.
+-- Calculates and follows a path to a destination.
+-- This runs separately because path calculations can yield and should not
+-- block the main AI decision loop.
 local function followPath(goal, pathId)
 
 	local path = PathfindingService:CreatePath({
@@ -504,35 +438,26 @@ local function followPath(goal, pathId)
 
 
 	local success = pcall(function()
-
 		path:ComputeAsync(
 			rootPart.Position,
 			goal
 		)
-
 	end)
 
 
-
-	-- Ignore old paths if the NPC has already received a newer command.
 	if not running or pathId ~= movementId then
 		return
 	end
 
 
+	if not success or path.Status ~= Enum.PathStatus.Success then
 
-	if not success
-		or path.Status ~= Enum.PathStatus.Success then
-
-		-- Direct movement acts as a fallback for simple areas where
-		-- pathfinding cannot generate a route.
+		-- Fallback movement for simple areas where a path cannot be created.
 		humanoid:MoveTo(goal)
-
 		humanoid.MoveToFinished:Wait()
 
 		return
 	end
-
 
 
 	for _, waypoint in path:GetWaypoints() do
@@ -545,36 +470,24 @@ local function followPath(goal, pathId)
 		end
 
 
-
-		if waypoint.Action ==
-			Enum.PathWaypointAction.Jump then
-
+		if waypoint.Action == Enum.PathWaypointAction.Jump then
 			humanoid.Jump = true
 		end
 
 
+		humanoid:MoveTo(waypoint.Position)
 
-		humanoid:MoveTo(
-			waypoint.Position
-		)
-
-
-		local reached =
-			humanoid.MoveToFinished:Wait()
-
-
+		local reached = humanoid.MoveToFinished:Wait()
 
 		if not reached then
 			return
 		end
-
 	end
 end
 
 
-
--- Creates movement requests while preventing excessive path calculations.
--- Recalculating paths too often can become expensive with many NPCs.
+-- Creates movement requests while limiting path calculations.
+-- Constantly recalculating paths can become expensive when many NPCs exist.
 local function requestMove(goal)
 
 	if not running then
@@ -584,16 +497,13 @@ local function requestMove(goal)
 
 	local now = time()
 
-
 	local goalChanged =
 		not lastGoal
 		or (goal - lastGoal).Magnitude > 5
 
 
 	local pathReady =
-		now - lastPathRequest >=
-		CONFIG.PathRefreshInterval
-
+		now - lastPathRequest >= CONFIG.PathRefreshInterval
 
 
 	if isMoving and not goalChanged then
@@ -606,43 +516,34 @@ local function requestMove(goal)
 	end
 
 
-
 	movementId += 1
 
 	local pathId = movementId
-
 
 	isMoving = true
 	lastGoal = goal
 	lastPathRequest = now
 
 
-
 	task.spawn(function()
 
-		followPath(
-			goal,
-			pathId
-		)
+		followPath(goal, pathId)
 
 
 		if running and pathId == movementId then
 			isMoving = false
 		end
-
 	end)
 end
 
 
-
--- Detects nearby obstacles that were not present when the path was created.
--- This allows the NPC to react to simple dynamic objects.
+-- Checks for small obstacles that appeared after path creation.
+-- This handles simple dynamic objects without constantly rebuilding paths.
 local function checkForSmallObstacle()
 
 	local result = workspace:Raycast(
 		rootPart.Position + Vector3.new(0, 1, 0),
-		rootPart.CFrame.LookVector
-			* CONFIG.ObstacleCheckDistance,
+		rootPart.CFrame.LookVector * CONFIG.ObstacleCheckDistance,
 		raycastParams
 	)
 
@@ -652,18 +553,13 @@ local function checkForSmallObstacle()
 	end
 
 
-
 	local model =
 		result.Instance:FindFirstAncestorOfClass("Model")
 
 
-	-- Ignore characters to prevent unnecessary jumping near players.
-	if model
-		and model:FindFirstChildOfClass("Humanoid") then
-
+	if model and model:FindFirstChildOfClass("Humanoid") then
 		return
 	end
-
 
 
 	local obstacleTop =
@@ -675,7 +571,6 @@ local function checkForSmallObstacle()
 		obstacleTop - rootPart.Position.Y
 
 
-
 	if heightDifference > 0
 		and heightDifference <= 4 then
 
@@ -684,10 +579,8 @@ local function checkForSmallObstacle()
 end
 
 
-
--- Chooses the NPC's current objective.
--- Separating state selection from movement prevents different behaviours
--- from fighting over control.
+-- Decides what the NPC should currently do.
+-- Movement is handled separately so different states cannot fight each other.
 local function chooseState(targetRoot)
 
 	local moodData = MOODS[currentMood]
@@ -709,7 +602,6 @@ local function chooseState(targetRoot)
 	end
 
 
-
 	if (rootPart.Position - homePosition).Magnitude
 		> CONFIG.ReturnDistance then
 
@@ -717,26 +609,21 @@ local function chooseState(targetRoot)
 	end
 
 
-
 	return "Wander"
 end
 
 
-
--- Calculates where the NPC should move when interacting with players.
--- Different personalities change positioning without needing separate systems.
+-- Creates a movement target based on the NPC personality.
+-- Different moods change positioning without needing separate AI systems.
 local function getInteractionGoal(targetRoot)
 
 	local moodData = MOODS[currentMood]
-
 
 	local difference =
 		targetRoot.Position - rootPart.Position
 
 
-	local distance =
-		difference.Magnitude
-
+	local distance = difference.Magnitude
 
 
 	if distance <= moodData.StopDistance then
@@ -744,20 +631,15 @@ local function getInteractionGoal(targetRoot)
 	end
 
 
-
 	if moodData.Behaviour == "Chase" then
 		return targetRoot.Position
 	end
 
 
-
 	if moodData.Behaviour == "Sneak" then
-
 		return targetRoot.Position
 			- targetRoot.CFrame.LookVector * 4
-
 	end
-
 
 
 	if moodData.Behaviour == "Orbit" then
@@ -769,9 +651,7 @@ local function getInteractionGoal(targetRoot)
 
 
 		return targetRoot.Position + offset
-
 	end
-
 
 
 	return targetRoot.Position
@@ -779,18 +659,13 @@ local function getInteractionGoal(targetRoot)
 end
 
 
-
--- Main AI decision function.
--- Each update decides one action, preventing multiple behaviours from
--- sending movement commands at the same time.
+-- Main decision loop for the NPC.
+-- Each update chooses one behaviour so multiple actions cannot override each other.
 local function updateNPC()
 
-	if not running
-		or humanoid.Health <= 0 then
-
+	if not running or humanoid.Health <= 0 then
 		return
 	end
-
 
 
 	if time() >= nextMoodChange then
@@ -798,26 +673,18 @@ local function updateNPC()
 	end
 
 
-
 	checkForSmallObstacle()
 
 
+	local targetRoot = getNearestPlayer()
 
-	local targetRoot =
-		getNearestPlayer()
-
-
-	setState(
-		chooseState(targetRoot)
-	)
-
+	setState(chooseState(targetRoot))
 
 
 	if currentState == "Interact"
 		and targetRoot then
 
-		local goal =
-			getInteractionGoal(targetRoot)
+		local goal = getInteractionGoal(targetRoot)
 
 
 		if goal then
@@ -838,18 +705,15 @@ local function updateNPC()
 	end
 
 
-
 	if currentState == "Flee"
 		and targetRoot then
 
 		local awayDirection =
-			rootPart.Position
-			- targetRoot.Position
+			rootPart.Position - targetRoot.Position
 
 
 		if awayDirection.Magnitude < 0.1 then
-			awayDirection =
-				rootPart.CFrame.LookVector
+			awayDirection = rootPart.CFrame.LookVector
 		end
 
 
@@ -860,22 +724,127 @@ local function updateNPC()
 			)
 		)
 
-
 		return
 	end
-
 
 
 	if currentState == "Return" then
-
 		requestMove(homePosition)
-
 		return
 	end
-
 
 
 	if not isMoving then
 		requestMove(getWanderPoint())
 	end
 end
+
+
+-- Cleans up every resource owned by this NPC controller.
+-- This prevents connections and running tasks from remaining after removal.
+local function cleanup()
+
+	if cleanedUp then
+		return
+	end
+
+
+	cleanedUp = true
+	running = false
+	movementId += 1
+
+	isMoving = false
+	lastGoal = nil
+
+
+	for _, connection in connections do
+		connection:Disconnect()
+	end
+
+
+	table.clear(connections)
+
+
+	if ownsSetMoodEvent
+		and setMoodEvent.Parent then
+
+		setMoodEvent:Destroy()
+	end
+end
+
+
+table.insert(
+	connections,
+	setMoodEvent.Event:Connect(function(newMood, duration)
+
+		if typeof(newMood) ~= "string" then
+			return
+		end
+
+		setMood(
+			string.upper(newMood),
+			duration
+		)
+
+	end)
+)
+
+
+-- Damage changes the NPC mood without needing another polling loop.
+table.insert(
+	connections,
+	humanoid.HealthChanged:Connect(function(newHealth)
+
+		if newHealth < lastHealth
+			and newHealth > 0 then
+
+			setMood("ANGRY", 12)
+		end
+
+
+		lastHealth = newHealth
+	end)
+)
+
+
+table.insert(
+	connections,
+	humanoid.Died:Connect(function()
+
+		setState("Dead")
+		cleanup()
+
+	end)
+)
+
+
+table.insert(
+	connections,
+	npc.Destroying:Connect(cleanup)
+)
+
+
+setMood("CALM")
+
+
+-- Heartbeat only acts as a timer.
+-- The interval check keeps expensive AI calculations from running every frame.
+table.insert(
+	connections,
+	RunService.Heartbeat:Connect(function()
+
+		local now = time()
+
+
+		if not running
+			or now - lastUpdate < CONFIG.UpdateInterval then
+
+			return
+		end
+
+
+		lastUpdate = now
+		updateNPC()
+
+	end)
+)
